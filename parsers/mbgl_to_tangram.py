@@ -12,7 +12,7 @@ text_field_regex = re.compile(r"{([^}]+)}")
 layer_type_mappings = {
     "fill": "polygons",
     "line": "lines",
-    "symbol": "text",  # TODO: This isn't entirely accurate
+    "symbol": "symbol",
     "circle": "points",
     "fill-extrusion": "polygons",
 }
@@ -108,45 +108,56 @@ class MBGLToTangramParser(JSONStyleParser):
         #     return expr_cleaned.format(**params)
 
     def render_draw(self, layer: dict):
-        result = {}
+        primary_type = layer["type"]
+        if primary_type == "symbol":
+            if layer.get("text-field"):
+                primary_type = "text"
+            else:
+                primary_type = "points"
+
         order = layer["idx"]
+        result = {
+            primary_type: {},
+        }
+        primary_draw = result[primary_type]
 
         color = layer.get("color")
         if color:
-            if layer["type"] == "text":
-                result["font"] = {"fill": color}
+            if primary_type == "text":
+                primary_draw["font"] = {"fill": color}
             else:
-                result["color"] = color
+                primary_draw["color"] = color
 
         if layer.get("width"):
-            result["width"] = layer["width"]
+            primary_draw["width"] = layer["width"]
         elif layer.get("type") == "lines":
-            result["width"] = "0.5px"
+            primary_draw["width"] = "0.5px"
 
         if layer.get("dash"):
-            result["dash"] = layer["dash"]
+            primary_draw["dash"] = layer["dash"]
 
-        if not result:
+        if not primary_draw:
             # At this point, we should have *something*
             # or the expression is invalid.
             self.emit_warning(f"Unable to render draw definition for layer {layer}")
             return None
 
-        if layer["type"] == "text":
-            result["move_into_tile"] = False
-            result["style"] = "overlay_text"
-            result["blend_order"] = order
+        if primary_type == "text":
+            primary_draw["move_into_tile"] = False
+            primary_draw["style"] = "overlay_text"
+            primary_draw["blend_order"] = order
 
             if layer.get("symbol-placement") == "line":
-                result["buffer"] = f"{layer.get('symbol-spacing', 2)}px"
+                primary_draw["placement"] = "spaced"
+                primary_draw["placement_spacing"] = f"{layer.get('symbol-spacing', 2)}px"
             else:
-                result["buffer"] = "2px"
+                primary_draw["buffer"] = "2px"
 
             source = self.render_text_source(layer["text-field"])
             if source:
-                result["text_source"] = source
+                primary_draw["text_source"] = source
 
-            font = result.get("font", {})
+            font = primary_draw.get("font", {})
 
             if layer.get("text-font"):
                 family = layer["text-font"]
@@ -164,22 +175,22 @@ class MBGLToTangramParser(JSONStyleParser):
 
             font["priority"] = 999 - order
 
-            result["font"] = font
+            primary_draw["font"] = font
 
             # TODO: Text halo?
             # TODO: Text blur?
             # TODO: Text translate?
-        elif layer["type"] in {"polygons", "lines"}:
-            result["order"] = order
-            result["blend_order"] = order
+        elif primary_type in {"polygons", "lines"}:
+            primary_draw["order"] = order
+            primary_draw["blend_order"] = order
             # TODO: Check if we need alpha
-            result["style"] = f'inlay_{layer["type"]}'
+            primary_draw["style"] = f"inlay_{primary_type}"
 
             if layer.get("line-join"):
-                result["join"] = layer["line-join"]
+                primary_draw["join"] = layer["line-join"]
 
             if layer.get("line-cap"):
-                result["cap"] = layer["line-cap"]
+                primary_draw["cap"] = layer["line-cap"]
 
         return result
 
@@ -210,7 +221,7 @@ class MBGLToTangramParser(JSONStyleParser):
                     if not draw:
                         return  # Errors reported internally
 
-                    layer["draw"] = {ctx_layer["type"]: draw}
+                    layer["draw"] = draw
 
                     if ctx_layer.get("minzoom"):
                         zoom["min"] = ctx_layer["minzoom"]

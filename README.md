@@ -66,4 +66,6 @@ perfect, but well under way.
 
 * Exponential stops for colors and line widths (base is completely ignored, so they will be linear)
 * Icons are not yet supported, but are definitely possible so expect these soon
+* Extrusions
+* Point layers
 * Probably everything else not mentioned here ;)

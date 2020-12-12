@@ -20,7 +20,7 @@ if __name__ == "__main__":
             parser = MBGLToTangramParser(style)
             parser.parse()
 
-            print(yaml.dump(parser.result, indent=2))
+            print(yaml.dump(parser.result))
 
         sys.stderr.write("\n".join(f"Warning at {path}: {warning}" for (path, warning) in parser.warnings) + "\n")
         sys.stderr.flush()
