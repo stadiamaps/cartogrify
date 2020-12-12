@@ -37,6 +37,8 @@ geom_mappings = {
     "MultiPolygon": "polygon",
 }
 passthrough_tags = {
+    "icon-image",
+    "icon-size",
     "line-cap",
     "line-join",
     "symbol-placement",
@@ -59,6 +61,22 @@ def convert_stops_or_value(expr, unit=""):
 
 
 class MBGLToTangramParser(JSONStyleParser):
+    def render_sprite(self, url):
+        result = {
+            "url": f"{url}@2x.png",
+            "density": 2,
+            "sprites": {},
+        }
+
+        res = requests.get(f"{url}@2x.json")
+
+        for name, data in res.json().items():
+            result["sprites"][name] = [data["x"], data["y"], data["width"], data["height"]]
+
+        self.emit(("textures", "spritesheet"), result)
+
+        self.emit(("styles", "icons"), {"base": "points", "blend": "inlay", "texture": "spritesheet"})
+
     def render_layer_filter(self, expr, ctx=None):
         if isinstance(expr[0], str) and expr[0] in binary_bool_ops:
             return self.render_layer_filter(expr[1:], expr[0])
@@ -108,56 +126,74 @@ class MBGLToTangramParser(JSONStyleParser):
         #     return expr_cleaned.format(**params)
 
     def render_draw(self, layer: dict):
-        primary_type = layer["type"]
-        if primary_type == "symbol":
-            if layer.get("text-field"):
-                primary_type = "text"
-            else:
-                primary_type = "points"
-
         order = layer["idx"]
-        result = {
-            primary_type: {},
-        }
-        primary_draw = result[primary_type]
+        layer_type = layer["type"]
+
+        text_draw = None
+        icons_draw = None
+        geom_draw = None
+        result = {}
+
+        if layer_type == "symbol":
+            if layer.get("text-field"):
+                text_draw = {}
+
+                if layer.get("icon-image"):
+                    text_draw["anchor"] = "right"
+                    icons_draw = {
+                        "text": text_draw,
+                        "order": order,
+                        "blend_order": order,
+                    }
+                    result["icons"] = icons_draw
+                else:
+                    result["text"] = text_draw
+            else:
+                # TODO: Point only layers
+                pass
+        else:
+            geom_draw = {}
+            result[layer_type] = geom_draw
+
+        # TODO: Figure out text and point ordering
 
         color = layer.get("color")
         if color:
-            if primary_type == "text":
-                primary_draw["font"] = {"fill": color}
+            if text_draw is not None:
+                text_draw["font"] = {"fill": color}
             else:
-                primary_draw["color"] = color
+                geom_draw["color"] = color
 
         if layer.get("width"):
-            primary_draw["width"] = layer["width"]
+            geom_draw["width"] = layer["width"]
         elif layer.get("type") == "lines":
-            primary_draw["width"] = "0.5px"
+            geom_draw["width"] = "0.5px"
 
         if layer.get("dash"):
-            primary_draw["dash"] = layer["dash"]
+            geom_draw["dash"] = layer["dash"]
 
-        if not primary_draw:
+        if not geom_draw and not text_draw:
             # At this point, we should have *something*
             # or the expression is invalid.
             self.emit_warning(f"Unable to render draw definition for layer {layer}")
             return None
 
-        if primary_type == "text":
-            primary_draw["move_into_tile"] = False
-            primary_draw["style"] = "overlay_text"
-            primary_draw["blend_order"] = order
+        if text_draw:
+            text_draw["move_into_tile"] = False
+            text_draw["style"] = "overlay_text"
+            text_draw["blend_order"] = order
 
             if layer.get("symbol-placement") == "line":
-                primary_draw["placement"] = "spaced"
-                primary_draw["placement_spacing"] = f"{layer.get('symbol-spacing', 2)}px"
-            else:
-                primary_draw["buffer"] = "2px"
+                text_draw["placement"] = "spaced"
+                text_draw["placement_spacing"] = f"{layer.get('symbol-spacing', 2)}px"
+            # else:
+            #     primary_draw["buffer"] = "2px"
 
             source = self.render_text_source(layer["text-field"])
             if source:
-                primary_draw["text_source"] = source
+                text_draw["text_source"] = source
 
-            font = primary_draw.get("font", {})
+            font = text_draw.get("font", {})
 
             if layer.get("text-font"):
                 family = layer["text-font"]
@@ -175,22 +211,33 @@ class MBGLToTangramParser(JSONStyleParser):
 
             font["priority"] = 999 - order
 
-            primary_draw["font"] = font
+            # Though dicts are mutable, if the font key did not previously exist, we still
+            # need to set it here
+            text_draw["font"] = font
 
             # TODO: Text halo?
             # TODO: Text blur?
             # TODO: Text translate?
-        elif primary_type in {"polygons", "lines"}:
-            primary_draw["order"] = order
-            primary_draw["blend_order"] = order
+        elif geom_draw:
+            geom_draw["order"] = order
+            geom_draw["blend_order"] = order
             # TODO: Check if we need alpha
-            primary_draw["style"] = f"inlay_{primary_type}"
+            geom_draw["style"] = f"inlay_{layer_type}"
 
             if layer.get("line-join"):
-                primary_draw["join"] = layer["line-join"]
+                geom_draw["join"] = layer["line-join"]
 
             if layer.get("line-cap"):
-                primary_draw["cap"] = layer["line-cap"]
+                geom_draw["cap"] = layer["line-cap"]
+
+        if icons_draw:
+            icon = layer["icon-image"]
+            if isinstance(icon, str):
+                icons_draw["sprite"] = icon
+                if layer.get("icon-size"):
+                    icons_draw["size"] = f"{layer['icon-size'] * 100}%"
+            else:
+                self.emit_warning(f"Only simple string icon-image values are currently supported. Found {icon}")
 
         return result
 
@@ -307,3 +354,5 @@ class MBGLToTangramParser(JSONStyleParser):
             self.visit_layer(e)
         elif self.tag_path[0] == "sources":
             self.visit_source(e)
+        elif self.tag_path[0] == "sprite":
+            self.render_sprite(e)
