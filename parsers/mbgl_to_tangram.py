@@ -36,6 +36,18 @@ geom_mappings = {
     "Polygon": "polygon",
     "MultiPolygon": "polygon",
 }
+anchor_mappings = {
+    # Mapbox swaps the order of what's anchored to what vs Tangram
+    "center": "center",
+    "left": "right",
+    "right": "left",
+    "top": "bottom",
+    "bottom": "top",
+    "top-left": "bottom-right",
+    "bottom-right": "top-left",
+    "top-right": "bottom-left",
+    "bottom-left": "top-right",
+}
 passthrough_tags = {
     "icon-image",
     "icon-size",
@@ -43,6 +55,7 @@ passthrough_tags = {
     "line-join",
     "symbol-placement",
     "symbol-spacing",
+    "text-anchor",
     "text-field",
     "text-font",
     "text-size",
@@ -69,6 +82,11 @@ def render_text_source(expr: str):
         def repl(match):
             return f"${{feature[\"{match.group(1)}\"] || ''}}"
 
+        # NOTE: The trim is necessary in case the final field is blank/undefined.
+        # Consider a multilingual map in which everything should be shown in Korean and
+        # English. The Mapbox style may contain a format string like this: "{name:kr}\n{name:en}".
+        # As most labels outside Korea will only be tagged in English, the resulting string may look
+        # something like "\nErie". This will be rendered off-center by Tangram.
         return f"function() {{ return `{text_field_regex.sub(repl, expr)}`.trim() }}"
 
 
@@ -131,8 +149,23 @@ class MBGLToTangramParser(JSONStyleParser):
             if layer.get("text-field"):
                 text_draw = {}
 
+                if layer.get("text-anchor"):
+                    anchor = layer["text-anchor"]
+
+                    if isinstance(anchor, str):
+                        # Simple anchor
+                        text_draw["anchor"] = anchor_mappings[anchor]
+                    elif isinstance(anchor, dict) and isinstance(anchor.get("stops"), list):
+                        # Stops... not really supported
+                        value = anchor["stops"][0][1]
+                        text_draw["anchor"] = anchor_mappings[value]
+                        self.emit_warning(
+                            f"Complex text anchor expressions are not supported. Picking the first stop {repr(value)} from {repr(anchor)}"
+                        )
+                    else:
+                        self.emit_warning(f"Unable to parse text anchor expression: {repr(anchor)}")
+
                 if layer.get("icon-image"):
-                    text_draw["anchor"] = "right"
                     icons_draw = {
                         "text": text_draw,
                         "order": order,
@@ -192,12 +225,22 @@ class MBGLToTangramParser(JSONStyleParser):
                 text_font = layer["text-font"]
 
                 if isinstance(text_font, list):
+                    # for family in text_font:
+                    #     self.emit(("fonts", family), "external")
+
                     text_font = ", ".join(text_font)
+                else:
+                    pass
+                    # self.emit(("fonts", text_font), "external")
 
                 font["family"] = text_font
 
             if layer.get("text-size"):
-                font["size"] = layer["text-size"]
+                size = layer["text-size"]
+                if isinstance(size, dict):
+                    size = convert_stops_or_value(size["stops"])
+
+                font["size"] = size
 
             if layer.get("text-transform"):
                 font["transform"] = layer["text-transform"]
@@ -339,7 +382,19 @@ class MBGLToTangramParser(JSONStyleParser):
                     # TODO: Handle non-linear bases
                     layer["width"] = convert_stops_or_value(e, unit="px")
         elif self.tag_path[2] == "layout" and self.tag_path[3] in passthrough_tags:
-            layer[self.tag_path[3]] = e
+            if len(self.tag_path) > 4:
+                # Create nested structure if necessary
+                last = None
+                for key in self.tag_path[3:-1]:
+                    if last is None:
+                        layer[key] = layer.get(key, {})
+                        last = layer[key]
+                    else:
+                        last[key] = last.get(key, {})
+                        last = last[key]
+                last[self.tag_path[-1]] = e
+            else:
+                layer[self.tag_path[-1]] = e
 
     def visit(self, e: Union[str, int, float, list]):
         # print(self.tag_path, e)
