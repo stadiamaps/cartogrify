@@ -64,13 +64,11 @@ passthrough_tags = {
 }
 
 
-def convert_stops_or_value(expr, unit=""):
-    scale = 2 if unit == "px" else None
-
+def convert_stops_or_value(expr, unit="", scale_factor=0):
     if isinstance(expr, list):
-        return [[zoom, f"{float(value) / scale if scale else value}{unit}"] for (zoom, value) in expr]
+        return [[zoom, f"{float(value) * scale_factor if scale_factor else value}{unit}"] for (zoom, value) in expr]
     else:
-        return f"{float(expr) / scale if scale else expr}{unit}"
+        return f"{float(expr) * scale_factor if scale_factor else expr}{unit}"
 
 
 def render_text_source(expr: str):
@@ -247,11 +245,16 @@ class MBGLToTangramParser(JSONStyleParser):
 
             font["priority"] = 999 - order
 
+            if layer.get("halo-color") and layer.get("halo-width"):
+                font["stroke"] = {
+                    "color": layer["halo-color"],
+                    "width": layer["halo-width"],
+                }
+
             # Though dicts are mutable, if the font key did not previously exist, we still
             # need to set it here
             text_draw["font"] = font
 
-            # TODO: Text halo?
             # TODO: Text blur?
             # TODO: Text translate?
         elif geom_draw:
@@ -375,12 +378,23 @@ class MBGLToTangramParser(JSONStyleParser):
                 if len(self.tag_path) == 4 or self.tag_path[4] == "stops":
                     # TODO: Handle non-linear bases
                     layer["color"] = convert_stops_or_value(e)
+            elif self.tag_path[3] == "text-halo-color":
+                # TODO: This is probably a hackish assumption that one of these reduces to the layer "color"
+                if len(self.tag_path) == 4 or self.tag_path[4] == "stops":
+                    # TODO: Handle non-linear bases
+                    layer["halo-color"] = convert_stops_or_value(e)
+            elif self.tag_path[3] == "text-halo-width":
+                # TODO: This is probably a hackish assumption that one of these reduces to the layer "color"
+                if len(self.tag_path) == 4 or self.tag_path[4] == "stops":
+                    # TODO: Handle non-linear bases
+                    layer["halo-width"] = convert_stops_or_value(e, unit="px", scale_factor=2)
             elif self.tag_path[3] == "line-dasharray":
                 layer["dash"] = e
             elif self.tag_path[3] == "line-width":
                 if len(self.tag_path) == 4 or self.tag_path[4] == "stops":
                     # TODO: Handle non-linear bases
-                    layer["width"] = convert_stops_or_value(e, unit="px")
+                    # TODO: Figure out why this scale factor is necessary
+                    layer["width"] = convert_stops_or_value(e, unit="px", scale_factor=0.5)
         elif self.tag_path[2] == "layout" and self.tag_path[3] in passthrough_tags:
             if len(self.tag_path) > 4:
                 # Create nested structure if necessary
