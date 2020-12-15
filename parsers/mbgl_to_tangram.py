@@ -60,6 +60,18 @@ def convert_stops_or_value(expr, unit=""):
         return f"{float(expr) / scale if scale else expr}{unit}"
 
 
+def render_text_source(expr: str):
+    fmt = text_field_regex.fullmatch(expr)
+    if fmt:
+        # Single field
+        return fmt.group(1)
+    else:
+        def repl(match):
+            return f"${{feature[\"{match.group(1)}\"] || ''}}"
+
+        return f"function() {{ return `{text_field_regex.sub(repl, expr)}`.trim() }}"
+
+
 class MBGLToTangramParser(JSONStyleParser):
     def render_sprite(self, url):
         result = {
@@ -105,25 +117,6 @@ class MBGLToTangramParser(JSONStyleParser):
             return [self.render_layer_filter(e) for e in expr]
 
         self.emit_warning(f"Unable to parse filter expr: {expr}\n")
-
-    def render_text_source(self, expr: str):
-        fmt = text_field_regex.fullmatch(expr)
-        if fmt:
-            # Single field
-            return fmt.group(1)
-        else:
-            self.emit_warning(f"Unable to parse complex text source: {repr(expr)}")
-        #     params = {}
-        #
-        #     def repl(match):
-        #         cleaned = match.group(1).replace(':', '-')
-        #
-        #         params[cleaned] = match.group(1)
-        #
-        #         return match.group(1)
-        #
-        #     expr_cleaned = text_field_regex.sub(repl, expr)
-        #     return expr_cleaned.format(**params)
 
     def render_draw(self, layer: dict):
         order = layer["idx"]
@@ -189,7 +182,7 @@ class MBGLToTangramParser(JSONStyleParser):
             # else:
             #     primary_draw["buffer"] = "2px"
 
-            source = self.render_text_source(layer["text-field"])
+            source = render_text_source(layer["text-field"])
             if source:
                 text_draw["text_source"] = source
 
