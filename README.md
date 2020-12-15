@@ -53,11 +53,8 @@ Text layout does not seem to be exactly correct in all cases.
 And Mapbox text format strings with more than one field referenced
 are ignored at the moment.
 
-Tangram does not appear to support multiple fonts in a fallback "stack" like Mapbox GL JS
-does. Additionally, you are currently on your own for specifying fonts. A forthcoming version
+You wil need to add a `fonts` section manually with the URLs of your fonts. A forthcoming version
 will probably allow you to specify a Google Fonts API Key to locate common fonts automatically.
-In light of the above though, you may be better off just combining all your glyphs into a custom
-super-font.
 
 Most of the above errors should be reported at runtime. Error detection is not
 perfect, but well under way.

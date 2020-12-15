@@ -196,12 +196,12 @@ class MBGLToTangramParser(JSONStyleParser):
             font = text_draw.get("font", {})
 
             if layer.get("text-font"):
-                family = layer["text-font"]
-                if isinstance(family, list):
-                    self.emit_warning("Multiple fonts specified, but only the first font will be preserved.")
-                    family = family[0]
+                text_font = layer["text-font"]
 
-                font["family"] = family
+                if isinstance(text_font, list):
+                    text_font = ", ".join(text_font)
+
+                font["family"] = text_font
 
             if layer.get("text-size"):
                 font["size"] = layer["text-size"]
