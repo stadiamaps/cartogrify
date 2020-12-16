@@ -206,6 +206,7 @@ class MBGLToTangramParser(JSONStyleParser):
             text_draw["move_into_tile"] = False
             text_draw["style"] = "overlay_text"
             text_draw["blend_order"] = order
+            text_draw["priority"] = 999 - order
 
             if layer.get("symbol-placement") == "line":
                 text_draw["placement"] = "spaced"
@@ -243,8 +244,6 @@ class MBGLToTangramParser(JSONStyleParser):
             if layer.get("text-transform"):
                 font["transform"] = layer["text-transform"]
 
-            font["priority"] = 999 - order
-
             if layer.get("halo-color") and layer.get("halo-width"):
                 font["stroke"] = {
                     "color": layer["halo-color"],
@@ -273,10 +272,18 @@ class MBGLToTangramParser(JSONStyleParser):
             icon = layer["icon-image"]
             if isinstance(icon, str):
                 icons_draw["sprite"] = icon
+            elif isinstance(icon, dict) and isinstance(icon.get("stops"), list):
+                # Stops... not really supported
+                value = icon["stops"][0][1]
+                icons_draw["sprite"] = value
+                self.emit_warning(
+                    f"Complex icon-image expressions are not supported. Picking the first stop {repr(value)} from {repr(icon)}"
+                )
+            else:
+                self.emit_warning(f"Unable to parse icon-image expression: {repr(icon)}")
+
                 if layer.get("icon-size"):
                     icons_draw["size"] = f"{layer['icon-size'] * 100}%"
-            else:
-                self.emit_warning(f"Only simple string icon-image values are currently supported. Found {icon}")
 
         return result
 
