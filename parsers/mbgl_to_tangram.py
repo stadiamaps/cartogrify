@@ -64,11 +64,51 @@ passthrough_tags = {
 }
 
 
-def convert_stops_or_value(expr, unit="", scale_factor=0):
+def convert_stops_or_value(expr, unit="", base=1.0, requires_meters_per_pixel=False):
     if isinstance(expr, list):
-        return [[zoom, f"{float(value) * scale_factor if scale_factor else value}{unit}"] for (zoom, value) in expr]
+        if base == 1.0:
+            return [[zoom, f"{value}{unit}"] for (zoom, value) in expr]
+        else:
+            # TODO: Handle colors and arrays of numbers(?)
+            return f"""function() {{
+    const zoom = $zoom;
+    const stops = {expr};
+    let lowerZoom = stops[0][0];
+    let upperZoom = stops[1][0];
+    let lowerValue = stops[0][1];
+    let upperValue = stops[1][1];
+    
+    if (zoom < lowerZoom) return lowerValue;
+    
+    for (let i = 1; i < stops.length; i++) {{ 
+        if (stops[i][0] > zoom) break;
+        
+        lowerZoom = upperZoom;
+        upperZoom = stops[i][0];
+        
+        lowerValue = upperValue;
+        upperValue = stops[i][1];
+    }}
+    
+    const base = {base};
+    const range = upperZoom - lowerZoom;
+    const progress = zoom - lowerZoom;
+    
+    let ratio;
+    
+    if (range === 0) {{
+        ratio = 0;
+    }} else if (base === 1) {{
+        ratio = progress / range;
+    }} else {{
+        ratio = (Math.pow(base, progress) - 1) / (Math.pow(base, range) - 1);
+    }}
+    
+    const value = Math.min(upperValue, ((lowerValue * (1 - ratio)) + (upperValue * ratio)));
+    return {"value * $meters_per_pixel" if requires_meters_per_pixel else "value"};
+}}"""
     else:
-        return f"{float(expr) * scale_factor if scale_factor else expr}{unit}"
+        return f"{expr}{unit}"
 
 
 def render_text_source(expr: str):
@@ -167,7 +207,7 @@ class MBGLToTangramParser(JSONStyleParser):
                     icons_draw = {
                         "text": text_draw,
                         "order": order,
-                        "blend_order": order,
+                        "blend_order": 999,
                     }
                     result["icons"] = icons_draw
                 else:
@@ -188,10 +228,14 @@ class MBGLToTangramParser(JSONStyleParser):
             else:
                 geom_draw["color"] = color
 
-        if layer.get("width"):
-            geom_draw["width"] = layer["width"]
+        if layer.get("width") or layer.get("width-stops"):
+            layer_width = layer.get("width", layer.get("width-stops"))
+            base = layer.get("width-base", 1.0)
+
+            layer_width = convert_stops_or_value(layer_width, unit="px", base=base, requires_meters_per_pixel=True)
+            geom_draw["width"] = layer_width
         elif layer.get("type") == "lines":
-            geom_draw["width"] = "0.5px"
+            geom_draw["width"] = "1px"
 
         if layer.get("dash"):
             geom_draw["dash"] = layer["dash"]
@@ -205,14 +249,12 @@ class MBGLToTangramParser(JSONStyleParser):
         if text_draw:
             text_draw["move_into_tile"] = False
             text_draw["style"] = "overlay_text"
-            text_draw["blend_order"] = order
+            text_draw["blend_order"] = 999
             text_draw["priority"] = 999 - order
 
             if layer.get("symbol-placement") == "line":
                 text_draw["placement"] = "spaced"
                 text_draw["placement_spacing"] = f"{layer.get('symbol-spacing', 2)}px"
-            # else:
-            #     primary_draw["buffer"] = "2px"
 
             source = render_text_source(layer["text-field"])
             if source:
@@ -237,17 +279,24 @@ class MBGLToTangramParser(JSONStyleParser):
             if layer.get("text-size"):
                 size = layer["text-size"]
                 if isinstance(size, dict):
-                    size = convert_stops_or_value(size["stops"])
+                    size = convert_stops_or_value(size["stops"], base=size.get("base", 1.0))
 
                 font["size"] = size
 
             if layer.get("text-transform"):
                 font["transform"] = layer["text-transform"]
 
-            if layer.get("halo-color") and layer.get("halo-width"):
+            if layer.get("halo-color") and (layer.get("halo-width") or layer.get("halo-width-stops")):
+                halo_width = layer.get("halo-width", layer.get("halo-width-stops"))
+                # TODO: Base not supported
+                if layer.get("halo-width-base", 1) != 1:
+                    self.emit_warning("Unsupported exponential halo-width-base; this will be interpreted as linear.")
+
+                halo_width = convert_stops_or_value(halo_width, unit="px")
+
                 font["stroke"] = {
                     "color": layer["halo-color"],
-                    "width": layer["halo-width"],
+                    "width": halo_width,
                 }
 
             # Though dicts are mutable, if the font key did not previously exist, we still
@@ -282,8 +331,8 @@ class MBGLToTangramParser(JSONStyleParser):
             else:
                 self.emit_warning(f"Unable to parse icon-image expression: {repr(icon)}")
 
-                if layer.get("icon-size"):
-                    icons_draw["size"] = f"{layer['icon-size'] * 100}%"
+            if layer.get("icon-size"):
+                icons_draw["size"] = f"{layer['icon-size'] * 100}%"
 
         return result
 
@@ -386,22 +435,25 @@ class MBGLToTangramParser(JSONStyleParser):
                     # TODO: Handle non-linear bases
                     layer["color"] = convert_stops_or_value(e)
             elif self.tag_path[3] == "text-halo-color":
-                # TODO: This is probably a hackish assumption that one of these reduces to the layer "color"
                 if len(self.tag_path) == 4 or self.tag_path[4] == "stops":
                     # TODO: Handle non-linear bases
                     layer["halo-color"] = convert_stops_or_value(e)
             elif self.tag_path[3] == "text-halo-width":
-                # TODO: This is probably a hackish assumption that one of these reduces to the layer "color"
-                if len(self.tag_path) == 4 or self.tag_path[4] == "stops":
-                    # TODO: Handle non-linear bases
-                    layer["halo-width"] = convert_stops_or_value(e, unit="px", scale_factor=2)
+                if len(self.tag_path) == 4:
+                    layer["halo-width"] = e
+                elif self.tag_path[4] == "stops":
+                    layer["halo-width-stops"] = e
+                elif self.tag_path[4] == "base":
+                    layer["halo-width-base"] = e
             elif self.tag_path[3] == "line-dasharray":
                 layer["dash"] = e
             elif self.tag_path[3] == "line-width":
-                if len(self.tag_path) == 4 or self.tag_path[4] == "stops":
-                    # TODO: Handle non-linear bases
-                    # TODO: Figure out why this scale factor is necessary
-                    layer["width"] = convert_stops_or_value(e, unit="px", scale_factor=0.5)
+                if len(self.tag_path) == 4:
+                    layer["width"] = e
+                elif self.tag_path[4] == "stops":
+                    layer["width-stops"] = e
+                elif self.tag_path[4] == "base":
+                    layer["width-base"] = e
         elif self.tag_path[2] == "layout" and self.tag_path[3] in passthrough_tags:
             if len(self.tag_path) > 4:
                 # Create nested structure if necessary
