@@ -117,6 +117,7 @@ def render_text_source(expr: str):
         # Single field
         return fmt.group(1)
     else:
+
         def repl(match):
             return f"${{feature[\"{match.group(1)}\"] || ''}}"
 
@@ -143,7 +144,7 @@ class MBGLToTangramParser(JSONStyleParser):
 
         self.emit(("textures", "spritesheet"), result)
 
-        self.emit(("styles", "icons"), {"base": "points", "blend": "inlay", "texture": "spritesheet"})
+        self.emit(("styles", "icons"), {"base": "points", "blend": "overlay", "texture": "spritesheet"})
 
     def render_layer_filter(self, expr, ctx=None):
         if isinstance(expr[0], str) and expr[0] in binary_bool_ops:
@@ -206,7 +207,7 @@ class MBGLToTangramParser(JSONStyleParser):
                 if layer.get("icon-image"):
                     icons_draw = {
                         "text": text_draw,
-                        "order": order,
+                        "priority": 999 - order,
                         "blend_order": 999,
                     }
                     result["icons"] = icons_draw
@@ -247,14 +248,17 @@ class MBGLToTangramParser(JSONStyleParser):
             return None
 
         if text_draw:
-            text_draw["move_into_tile"] = False
-            text_draw["style"] = "overlay_text"
             text_draw["blend_order"] = 999
-            text_draw["priority"] = 999 - order
+
+            if not icons_draw:
+                text_draw["priority"] = 999 - order
 
             if layer.get("symbol-placement") == "line":
                 text_draw["placement"] = "spaced"
-                text_draw["placement_spacing"] = f"{layer.get('symbol-spacing', 2)}px"
+
+                spacing = layer.get("symbol-spacing")
+                if spacing:
+                    text_draw["placement_spacing"] = f"{spacing}px"
 
             source = render_text_source(layer["text-field"])
             if source:
@@ -309,7 +313,7 @@ class MBGLToTangramParser(JSONStyleParser):
             geom_draw["order"] = order
             geom_draw["blend_order"] = order
             # TODO: Check if we need alpha
-            geom_draw["style"] = f"inlay_{layer_type}"
+            geom_draw["style"] = f"translucent_{layer_type}"
 
             if layer.get("line-join"):
                 geom_draw["join"] = layer["line-join"]
